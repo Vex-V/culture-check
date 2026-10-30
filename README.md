@@ -45,20 +45,7 @@ that miss.
    | `find_moment` | Searches the video's shots |
    | `cue_detail` | Returns everything held about one cue |
 
-## Accuracy
 
-Predictions were written before each test ran. Full results are in
-[eval/VALIDATION.md](eval/VALIDATION.md).
-
-| Test | Result |
-|---|---|
-| Do Qloo's cue audiences match a YouGov survey of celebrities? | 9 of 9 where Qloo has data, 9 of 12 overall |
-| Can the whole-video score tell which generation preferred an ad? | About 56% of 72 ad pairs, not distinguishable from chance on 17 ads |
-| Does the whole-video score match real Meta reach? | One usable pair, which it got right. Too few to count |
-
-- Use the cue-level data as measurement. Treat the whole-video score as a judgement.
-- An LLM without Qloo scored as well or better on these tests.
-- In the Meta ads tested, reach changed little between ads with the same targeting.
 
 ## Limits
 

@@ -99,7 +99,9 @@ python scripts/bundle.py deploy/seed
 vercel deploy --prod
 ```
 
-Set `OPENAI_API_KEY` and `QLOO_API_KEY` in the project's environment variables.
+Set `OPENAI_API_KEY` and `QLOO_API_KEY` in the project's environment variables, and connect
+a private Blob store. Vercel refuses requests over 4.5 MB, so large videos pass through the
+store and are deleted as soon as the app has fetched them.
 
 ## Data
 

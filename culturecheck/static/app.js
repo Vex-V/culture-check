@@ -47,13 +47,13 @@ function seg(el, options, value, onPick) {
 
 /* ------------------------------------------------------------ home */
 
-const upload = { file: null, age: "25_to_29", gender: "" };
+const upload = { file: null, age: "25_to_29", gender: "", blob: false };
 
 async function home() {
   show("home");
   document.title = "Culture Check";
   const lim = await api("/api/limits").catch(() => null);
-  if (lim) { $("#lim-s").textContent = lim.max_seconds; $("#lim-mb").textContent = lim.max_mb; }
+  if (lim) { $("#lim-s").textContent = lim.max_seconds; $("#lim-mb").textContent = lim.max_mb; upload.blob = lim.blob; }
   seg($("#up-age"), AGES, upload.age, (v) => (upload.age = v));
   seg($("#up-gender"), GENDERS, upload.gender, (v) => (upload.gender = v));
   const samples = await api("/api/samples").catch(() => []);
@@ -102,7 +102,7 @@ function wireUpload() {
 
 /* ------------------------------------------------------------ progress */
 
-const UPLOAD_PIECE = 1 << 20;
+const BLOB_CLIENT = "https://esm.sh/@vercel/blob@2.8.2/client";
 
 function renderSteps(steps, now, done) {
   $("#pg-steps").innerHTML = Object.entries(steps).map(([k, label]) => {
@@ -111,57 +111,62 @@ function renderSteps(steps, now, done) {
   }).join("");
 }
 
-async function send(ws, file) {
-  for (let at = 0; at < file.size; at += UPLOAD_PIECE) {
-    while (ws.bufferedAmount > 4 * UPLOAD_PIECE) await new Promise((r) => setTimeout(r, 50));
-    if (ws.readyState !== WebSocket.OPEN) return;
-    ws.send(await file.slice(at, at + UPLOAD_PIECE).arrayBuffer());
-  }
+/* Vercel refuses a request over 4.5 MB, so there the video goes to a Blob store first
+   and the app fetches it from there. */
+async function sendVideo(fd, file) {
+  fd.append("name", file.name);
+  if (!upload.blob) { fd.append("video", file); return; }
+  const { pathname, token } = await post("/api/upload-token", { name: file.name, size: file.size });
+  const { put } = await import(BLOB_CLIENT);
+  const stored = await put(pathname, file, { access: "private", token });
+  fd.append("url", stored.url);
 }
 
-/* One connection carries the upload, the progress and the report. Nothing is kept
-   on the server afterwards, so the page keeps the report, its frames and the file. */
-function check(file, aud) {
-  return new Promise((resolve, reject) => {
-    const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${location.host}/api/run`);
-    const frames = {}, done = new Set();
-    let steps = {}, now = null, finished = false;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ name: file.name, size: file.size, ...aud,
-                               music: $("#up-music").value.trim(), cast: $("#up-cast").value.trim() }));
-      send(ws, file);
-    };
-    ws.onmessage = async (e) => {
-      const m = JSON.parse(e.data);
-      if (m.type === "start") {
-        steps = m.steps;
-        show("progress");
-        $("#pg-err").textContent = "";
-        $("#pg-sub").textContent = `Checking a ${Math.round(m.seconds)}-second video can take a few minutes. Keep this page open.`;
-        renderSteps(steps, null, done);
-      } else if (m.type === "step") {
-        if (now) done.add(now);
-        now = m.step;
-        renderSteps(steps, now, done);
-      } else if (m.type === "frame") {
-        frames[m.index] = `data:image/jpeg;base64,${m.jpg}`;
-      } else if (m.type === "done") {
-        finished = true;
-        ws.close();
-        history.pushState({}, "", "/");
-        await openHeld(m.report, m.view, frames, URL.createObjectURL(file));
-        resolve();
-      } else if (m.type === "error") {
-        finished = true;
-        ws.close();
-        reject(new Error(m.error));
-      }
-    };
-    ws.onclose = () => {
-      if (!finished) reject(new Error("The connection closed before the check finished. Try a shorter video."));
-    };
-  });
+/* The response streams the progress and then the report. Nothing is kept on the server
+   afterwards, so the page keeps the report, its frames and the file. */
+async function check(file, aud) {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries({ ...aud, music: $("#up-music").value.trim(), cast: $("#up-cast").value.trim() })) fd.append(k, v);
+  await sendVideo(fd, file);
+  const r = await fetch("/api/run", { method: "POST", body: fd });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed (${r.status})`);
+  }
+  const frames = {}, done = new Set();
+  let steps = {}, now = null, finished = false;
+  const read = async (m) => {
+    if (m.type === "start") {
+      steps = m.steps;
+      show("progress");
+      $("#pg-err").textContent = "";
+      $("#pg-sub").textContent = `Checking a ${Math.round(m.seconds)}-second video can take a few minutes. Keep this page open.`;
+      renderSteps(steps, null, done);
+    } else if (m.type === "step") {
+      if (now) done.add(now);
+      now = m.step;
+      renderSteps(steps, now, done);
+    } else if (m.type === "frame") {
+      frames[m.index] = `data:image/jpeg;base64,${m.jpg}`;
+    } else if (m.type === "done") {
+      finished = true;
+      history.pushState({}, "", "/");
+      await openHeld(m.report, m.view, frames, URL.createObjectURL(file));
+    } else if (m.type === "error") {
+      throw new Error(m.error);
+    }
+  };
+  const lines = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let held = "";
+  for (;;) {
+    const { value, done: ended } = await lines.read();
+    if (ended) break;
+    held += value;
+    const parts = held.split("\n");
+    held = parts.pop();
+    for (const part of parts) if (part) await read(JSON.parse(part));
+  }
+  if (!finished) throw new Error("The connection closed before the check finished. Try a shorter video.");
 }
 
 /* ------------------------------------------------------------ report */

@@ -1,6 +1,7 @@
 """The web app: one page, and the routes it calls.
 
-    WS   /api/run                     a video in; progress, then the report, out
+    POST /api/upload-token            leave to upload one video to the Blob store
+    POST /api/run                     a video in; progress, then the report, out
     POST /api/view                    one audience over a report the page holds
     POST /api/chat                    a follow-up question about it
     GET  /api/reports/{id}            an example report (audience-independent)
@@ -10,7 +11,7 @@
     GET  /api/tested                  ads checked against Meta's published reach
 
 Stateless, so it can run on a host that may stop between requests: an upload
-lives for one connection and is deleted when the report has been sent. The page
+lives for one response and is deleted when the report has been sent. The page
 holds that report and sends it back with each question. Limits count per
 instance. One instance checks one video at a time: a small CPU host transcribes
 one well and two badly.
@@ -29,15 +30,15 @@ import secrets
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import HTTPConnection
 
-from . import agent, fit, report
+from . import agent, blob, fit, report
 from .config import settings, start_vidra
 
 log = logging.getLogger("culturecheck.app")
@@ -50,6 +51,10 @@ VIEWS_PER_VISITOR_DAY = 40
 
 #: Vercel refuses a response over 4.5 MB, so a video goes out in ranges below that.
 VIDEO_RANGE = 4 * 1024 * 1024
+#: Seconds a long step may stay silent: a proxy drops a quiet response.
+HEARTBEAT_S = 10
+#: The timeline shows a frame this wide; the page holds it, so it stays small.
+THUMBNAIL_WIDTH = 320
 
 app = FastAPI(title="Culture Check")
 running = asyncio.Lock()
@@ -101,19 +106,26 @@ def _duration(path: Path) -> float:
         return float(s.duration * s.time_base) if s.duration else 0.0
 
 
-async def _receive(ws: WebSocket, dest: Path, size: int) -> None:
-    """Writes `size` bytes from the connection's binary messages to `dest`."""
-    s = settings()
-    if size > s.max_mb * 1024 * 1024:
-        raise HTTPException(413, f"Videos up to {s.max_mb:.0f} MB, please.")
+def _extension(name: str) -> str:
+    ext = Path(name).suffix.lower()
+    if ext not in VIDEO_TYPES:
+        raise HTTPException(400, "Upload an .mp4, .mov, .m4v, .webm or .mkv video.")
+    return ext
+
+
+def _too_big() -> HTTPException:
+    return HTTPException(413, f"Videos up to {settings().max_mb:.0f} MB, please.")
+
+
+async def _receive(video: UploadFile, dest: Path) -> None:
+    limit = int(settings().max_mb * 1024 * 1024)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    got = 0
+    size = 0
     with dest.open("wb") as out:
-        while got < size:
-            chunk = await ws.receive_bytes()
-            got += len(chunk)
-            if got > size:
-                raise HTTPException(400, "The upload was longer than announced.")
+        while chunk := await video.read(1 << 20):
+            size += len(chunk)
+            if size > limit:
+                raise _too_big()
             out.write(chunk)
 
 
@@ -137,81 +149,123 @@ def _shown(found: dict[str, Any]) -> dict[str, Any]:
             "shot_ages": fit.shot_ages(found["cues"], found["shots"])}
 
 
-async def _analyse(ws: WebSocket, job: str, video: Path, aud: dict[str, Any],
-                   meta: dict[str, Any]) -> dict[str, Any]:
-    """The whole report, sending each step as it starts."""
-    loop = asyncio.get_running_loop()
-    steps: "asyncio.Queue[str]" = asyncio.Queue()
-
-    async def forward() -> None:
-        while True:
-            await ws.send_json({"type": "step", "step": await steps.get()})
-
-    sender = asyncio.create_task(forward())
-    try:
-        return await report.analyse(
-            job, video, aud, music=str(meta.get("music") or "").strip()[:120] or None,
-            cast=str(meta.get("cast") or "").strip()[:200] or None,
-            title=str(meta.get("title") or "").strip()[:80] or None,
-            on_step=lambda name: loop.call_soon_threadsafe(steps.put_nowait, name))
-    finally:
-        sender.cancel()
+def _line(**message: Any) -> str:
+    return json.dumps(message, ensure_ascii=False) + "\n"
 
 
-async def _send_frames(ws: WebSocket, job: str, found: dict[str, Any]) -> None:
+def _thumbnail(path: Path) -> str:
+    import cv2
+
+    image = cv2.imread(str(path))
+    scale = THUMBNAIL_WIDTH / image.shape[1]
+    small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return base64.b64encode(cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 75])[1]
+                            .tobytes()).decode()
+
+
+def _frames(job: str, found: dict[str, Any]) -> Iterator[str]:
     """One frame per shot, for the timeline: nothing keeps them after this."""
     for shot in found["shots"]:
         if shot["frames"]:
             index = shot["frames"][len(shot["frames"]) // 2]
-            path = settings().out / job / "store" / f"{index:07d}.jpg"
-            await ws.send_json({"type": "frame", "index": index,
-                                "jpg": base64.b64encode(path.read_bytes()).decode()})
+            yield _line(type="frame", index=index,
+                        jpg=_thumbnail(settings().out / job / "store" / f"{index:07d}.jpg"))
 
 
-@app.websocket("/api/run")
-async def run(ws: WebSocket) -> None:
-    await ws.accept()
-    s = settings()
-    job = secrets.token_hex(5)
-    dest: Optional[Path] = None
+async def _stream(job: str, video: Path, aud: dict[str, Any], given: dict[str, Any],
+                  seconds: float) -> AsyncIterator[str]:
+    """Each step as it starts, then the report, one JSON message per line."""
+    loop = asyncio.get_running_loop()
+    steps: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
+    work: Optional["asyncio.Task[dict[str, Any]]"] = None
     try:
-        if running.locked():
-            raise HTTPException(429, "Another video is being checked. Try again in a minute.")
         async with running:
-            meta = await ws.receive_json()
-            try:
-                aud = fit.audience(str(meta.get("age")), meta.get("gender") or None,
-                                   str(meta.get("location") or "")[:80])
-            except ValueError as exc:
-                raise HTTPException(400, str(exc)) from None
-            ext = Path(str(meta.get("name") or "")).suffix.lower()
-            if ext not in VIDEO_TYPES:
-                raise HTTPException(400, "Upload an .mp4, .mov, .m4v, .webm or .mkv video.")
-            dest = s.uploads / f"{job}{ext}"
-            await _receive(ws, dest, int(meta.get("size") or 0))
-            seconds = await asyncio.to_thread(_checked_length, dest)
-            _spend(ws, "uploads", s.per_visitor_day, s.per_day)
-            await ws.send_json({"type": "start", "steps": report.STEPS,
-                                "seconds": round(seconds, 1)})
-            meta["title"] = meta.get("title") or Path(str(meta.get("name"))).stem
-            found = await _analyse(ws, job, dest, aud, meta)
-            await _send_frames(ws, job, found)
-            await ws.send_json({"type": "done", "report": _shown(found),
-                                "view": report.cached_view(found, aud)})
-    except HTTPException as exc:
-        await ws.send_json({"type": "error", "error": exc.detail})
-    except WebSocketDisconnect:
-        return
+            yield _line(type="start", steps=report.STEPS, seconds=round(seconds, 1))
+            work = asyncio.create_task(report.analyse(
+                job, video, aud, **given,
+                on_step=lambda name: loop.call_soon_threadsafe(steps.put_nowait, name)))
+            work.add_done_callback(lambda _: steps.put_nowait(None))
+            while True:
+                try:
+                    step = await asyncio.wait_for(steps.get(), HEARTBEAT_S)
+                except asyncio.TimeoutError:
+                    yield _line(type="tick")
+                    continue
+                if step is None:
+                    break
+                yield _line(type="step", step=step)
+            found = work.result()
+            for frame in _frames(job, found):
+                yield frame
+            yield _line(type="done", report=_shown(found), view=report.cached_view(found, aud))
     except Exception as exc:                              # noqa: BLE001
         log.exception("job %s failed", job)
-        await ws.send_json({"type": "error",
-                            "error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+        yield _line(type="error", error=f"{type(exc).__name__}: {str(exc)[:300]}")
     finally:
-        if dest is not None:
-            dest.unlink(missing_ok=True)
-        shutil.rmtree(s.out / job, ignore_errors=True)
+        if work is not None:
+            work.cancel()
+        video.unlink(missing_ok=True)
+        shutil.rmtree(settings().out / job, ignore_errors=True)
         shutil.rmtree(report.folder(job), ignore_errors=True)
-    await ws.close()
+
+
+class Upload(BaseModel):
+    name: str
+    size: int
+
+
+@app.post("/api/upload-token")
+async def upload_token(body: Upload) -> dict[str, str]:
+    s = settings()
+    if not blob.enabled():
+        raise HTTPException(404, "Uploads go straight to /api/run here.")
+    ext = _extension(body.name)
+    limit = int(s.max_mb * 1024 * 1024)
+    if body.size > limit:
+        raise _too_big()
+    pathname = f"uploads/{secrets.token_hex(8)}{ext}"
+    return {"pathname": pathname, "token": blob.client_token(pathname, limit)}
+
+
+@app.post("/api/run")
+async def run(request: Request, video: Optional[UploadFile] = File(None), url: str = Form(""),
+              name: str = Form(""), age: str = Form(...), gender: str = Form(""),
+              location: str = Form(""), music: str = Form(""), cast: str = Form("")
+              ) -> StreamingResponse:
+    """A video as a file, or as a URL in the Blob store."""
+    s = settings()
+    try:
+        aud = fit.audience(age, gender or None, location[:80])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if running.locked():
+        raise HTTPException(429, "Another video is being checked. Try again in a minute.")
+    name = (video.filename if video else name) or ""
+    job = secrets.token_hex(5)
+    dest = s.uploads / f"{job}{_extension(name)}"
+    try:
+        if url:
+            if not (blob.enabled() and blob.ours(url)):
+                raise HTTPException(400, "That is not an upload of ours.")
+            if not await blob.fetch(url, dest, int(s.max_mb * 1024 * 1024)):
+                raise _too_big()
+        elif video:
+            await _receive(video, dest)
+        else:
+            raise HTTPException(400, "Send a video.")
+        seconds = await asyncio.to_thread(_checked_length, dest)
+        _spend(request, "uploads", s.per_visitor_day, s.per_day)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        if url and blob.enabled() and blob.ours(url):
+            await blob.delete(url)
+    given = {"music": music.strip()[:120] or None, "cast": cast.strip()[:200] or None,
+             "title": Path(name).stem[:80]}
+    return StreamingResponse(_stream(job, dest, aud, given, seconds),
+                             media_type="application/x-ndjson",
+                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- reports
@@ -351,7 +405,8 @@ async def tested() -> list[dict[str, Any]]:
 @app.get("/api/limits")
 async def limits() -> dict[str, Any]:
     s = settings()
-    return {"max_seconds": s.max_seconds, "max_mb": s.max_mb, "ages": fit.AGE_LABELS}
+    return {"max_seconds": s.max_seconds, "max_mb": s.max_mb, "ages": fit.AGE_LABELS,
+            "blob": blob.enabled()}
 
 
 @app.exception_handler(HTTPException)

@@ -2,11 +2,12 @@
 question, an example report, a frame and the video, and nothing of the upload left behind.
 
     python scripts/smoke.py http://127.0.0.1:8765 VIDEO [TOO_LONG_VIDEO]
+
+Posts the file, so on Vercel the video must be under 4.5 MB.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 import time
@@ -14,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from websockets.asyncio.client import connect
 
 base = sys.argv[1].rstrip("/")
 video = Path(sys.argv[2])
@@ -29,28 +29,25 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     print(f"  {'ok  ' if cond else 'FAIL'} {name} {detail}", flush=True)
 
 
-async def run(path: Path, meta: dict[str, Any], body: bytes | None = None) -> dict[str, Any]:
+def run(path: Path, meta: dict[str, Any], body: bytes | None = None) -> dict[str, Any]:
     """Everything the server sends for one upload."""
     data = path.read_bytes() if body is None else body
-    got: dict[str, Any] = {"steps": [], "frames": {}, "error": None, "done": None}
-    url = base.replace("http", "ws", 1) + "/api/run"
-    async with connect(url, max_size=None, ping_timeout=None) as ws:
-        await ws.send(json.dumps({"name": path.name, "size": len(data), **meta}))
-        for at in range(0, len(data), 1 << 20):
-            await ws.send(data[at:at + (1 << 20)])
-        async for raw in ws:
-            m = json.loads(raw)
-            if m["type"] == "step":
-                got["steps"].append(m["step"])
-                print("    ·", m["step"], flush=True)
-            elif m["type"] == "frame":
+    got: dict[str, Any] = {"frames": {}, "error": None, "done": None}
+    with c.stream("POST", "/api/run", data=meta, files={"video": (path.name, data)}) as r:
+        if r.status_code != 200:
+            r.read()
+            got["error"] = r.json()["error"]
+            return got
+        for line in r.iter_lines():
+            m = json.loads(line) if line else {}
+            if m.get("type") == "step":
+                print("    ·", m["step"], f"{time.time() - t0:.0f}s", flush=True)
+            elif m.get("type") == "frame":
                 got["frames"][m["index"]] = m["jpg"]
-            elif m["type"] == "error":
+            elif m.get("type") == "error":
                 got["error"] = m["error"]
-                break
-            elif m["type"] == "done":
+            elif m.get("type") == "done":
                 got["done"] = m
-                break
     return got
 
 
@@ -61,18 +58,19 @@ samples = c.get("/api/samples").json()
 check("samples", len(samples) > 0, f"{len(samples)}")
 check("tested", len(c.get("/api/tested").json()) > 0)
 
-bad = asyncio.run(run(video, {"age": "nope"}, b"x"))
+t0 = time.time()
+bad = run(video, {"age": "nope"}, b"x")
 check("bad age refused", bool(bad["error"]), bad["error"] or "")
-bad = asyncio.run(run(Path("x.txt"), {"age": "25_to_29"}, b"x"))
+bad = run(Path("x.txt"), {"age": "25_to_29"}, b"x")
 check("bad type refused", bool(bad["error"]), bad["error"] or "")
-bad = asyncio.run(run(video, {"age": "25_to_29"}, b"not a video"))
+bad = run(video, {"age": "25_to_29"}, b"not a video")
 check("not a video refused", bool(bad["error"]), bad["error"] or "")
 if too_long:
-    bad = asyncio.run(run(too_long, {"age": "25_to_29"}))
+    bad = run(too_long, {"age": "25_to_29"})
     check("too long refused", bool(bad["error"]), bad["error"] or "")
 
 t0 = time.time()
-got = asyncio.run(run(video, {"age": "35_to_44", "gender": "female", "location": "Chicago"}))
+got = run(video, {"age": "35_to_44", "gender": "female", "location": "Chicago"})
 check("upload finished", got["done"] is not None, got["error"] or f"{time.time() - t0:.0f}s")
 if got["done"] is None:
     sys.exit(1)
@@ -116,6 +114,8 @@ while at < size:
     seen += len(part.content)
     at += len(part.content)
 check("video whole by ranges", seen == size, f"{seen}")
+check("a URL not ours refused", c.post("/api/run", data={
+    "age": "25_to_29", "name": "x.mp4", "url": "https://example.com/x.mp4"}).status_code == 400)
 check("bad report refused", c.post("/api/view", json={"report": {"id": "../x", "cues": []},
                                                      "age": "25_to_29"}).status_code == 400)
 check("unknown report 404", c.get("/api/reports/doesnotexist").status_code == 404)

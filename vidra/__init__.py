@@ -1,14 +1,9 @@
 """VIDRA (Video Description, Retrieval & Aggregation): video in, searchable
-moments and higher-level answers out.
+moments out.
 
     video_rag/   extraction and search: picture and soundtrack read onto one
                  chunk grid, described, embedded and searchable
-    aggregates/  answers over what video_rag extracted: counts, speakers,
-                 summaries, chapters, events, entities
-    shared/      what both tiers use: config, reporting, document contracts,
-                 storage, models
-
-`workflow.py` runs video_rag's driver, then aggregates'.
+    shared/      config, reporting, document contracts, storage, models
 """
 
 from __future__ import annotations
@@ -38,7 +33,6 @@ _LAZY = {"Models": "vidra.shared.models.roles",
          "LocalVisualEmbedder": "vidra.shared.models.embedders.visual",
          "LocalMultimodalEmbedder": "vidra.shared.models.embedders.multimodal",
          "Database": "vidra.shared.storage.database",
-         "Supabase": "vidra.shared.storage.supabase",
          "Folder": "vidra.shared.storage.folder",
          # The base of a sampler of your own; the built-in ones are in
          # `vidra.video_rag.samplers`.
@@ -65,6 +59,6 @@ def __getattr__(name: str):
 
 __all__ = ["Anthropic", "Chat", "Database", "Embedder", "Folder", "HashEmbedder", "LLM",
            "LocalEmbedder", "LocalMultimodalEmbedder", "LocalVisualEmbedder", "ModelUnavailable", "Models", "OpenAI",
-           "OpenAIEmbedder", "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError",
+           "OpenAIEmbedder", "Sampler", "Stub", "Unavailable", "VLM", "VidraError",
            "View", "VisualEmbedder", "__version__", "configure"]
 

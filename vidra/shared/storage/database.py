@@ -193,7 +193,7 @@ def problem(value: Any) -> Optional[str]:
         return None
     if isinstance(value, str):
         return (f"database must be a built Database, not the name {value!r} -- "
-                f"e.g. Supabase() or Folder(\"data/out\")")
+                f"e.g. Folder(\"data/out\")")
     return f"database must be a Database, not {type(value).__name__}"
 
 
@@ -206,10 +206,9 @@ def as_database(value: Optional[Database]) -> Optional[Database]:
 
 
 def searched(value: Optional[Database]) -> Database:
-    """The database a search reads: `value`, or `Supabase()` when None."""
+    """The database a search reads."""
     if value is None:
-        from .supabase import Supabase
-        return Supabase()
+        raise Refused("a search needs a database, e.g. Folder(\"data/out\")")
     return as_database(value)
 
 

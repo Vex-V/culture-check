@@ -3,7 +3,6 @@
     core/       what every pipeline uses: samplers, the question vocabulary,
                 the frame store, search
     offline/    the batch pipeline: a whole file, every stage in order
-    live/       the streaming pipeline: an answer per kept frame as it arrives
 
 The batch stages, in order:
 
@@ -52,8 +51,6 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "layout": ("offline.driver", "layout"),
     "search": ("core.retrieve", "search"),
     "search_observations": ("core.retrieve", "search_observations"),
-    "video_rag_live": ("live.driver", "video_rag_live"),
-    "live": ("live", None),
     **{name: (f"offline.{name}", None) for name in (
         "media", "audio", "boundaries", "video", "cut", "describe", "glance",
         "embed")},
@@ -76,5 +73,4 @@ def __dir__() -> list[str]:
     return sorted([*globals(), *_LAZY])
 
 
-__all__ = ["Run", "layout", "search", "search_observations", "validate", "video_rag",
-           "video_rag_live"]
+__all__ = ["Run", "layout", "search", "search_observations", "validate", "video_rag"]

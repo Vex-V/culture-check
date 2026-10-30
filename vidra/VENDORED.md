@@ -17,5 +17,9 @@ here so Culture Check installs and runs from this repository alone.
 - vidra is MIT-licensed; its notice is [LICENSE](LICENSE), beside this file,
   and goes wherever this copy does.
 
+Removed from this copy because Culture Check never reaches them: `aggregates/`,
+`workflow.py`, `video_rag/live/`, the Supabase backend (`shared/storage/supabase.py`
+and `db.py`) and `shared/contracts/schemas.py`.
+
 To update it, copy the `vidra/` package from the vidra repository over this
-folder and keep this file and `LICENSE`.
+folder, remove those again, and keep this file and `LICENSE`.

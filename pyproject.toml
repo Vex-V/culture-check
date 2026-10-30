@@ -20,15 +20,10 @@ dependencies = [
     "opencv-python>=5",
     "numpy>=2",
     "python-dotenv",
-    "jsonschema",
     "openai",
-    "supabase",
     # the soundtrack: what is said and sung (CTranslate2, no torch)
     "faster-whisper",
 ]
-
-[project.optional-dependencies]
-dev = ["pytest>=8"]
 
 [project.scripts]
 culturecheck = "culturecheck.__main__:main"
@@ -40,4 +35,3 @@ include = ["culturecheck*", "vidra*"]
 culturecheck = ["static/*"]
 "vidra" = ["py.typed"]
 "vidra.video_rag.core.describe" = ["prompts.json"]
-"vidra.aggregates.definitions" = ["definitions.json"]

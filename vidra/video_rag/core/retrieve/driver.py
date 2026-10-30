@@ -87,8 +87,8 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         moments, notes = retrieve.search("the budget", ["q1", "q2"])
 
     Read `notes` when `moments` is empty: they say why. A `Moment.score` is a rank
-    fusion, not a similarity. `database` is a built `Database`
-    (`Supabase()` when None). `models.embedder` must be the one the index was
+    fusion, not a similarity. `database` is a built `Database`.
+    `models.embedder` must be the one the index was
     built with; None is OpenAI's default.
 
     `models.visual_embedder` also searches the frames `glance` embedded, in

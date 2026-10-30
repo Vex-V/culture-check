@@ -10,11 +10,8 @@
       progress.py   events from inside the long stages
     contracts/      what components hand each other
       documents.py  what every artifact is
-      schemas.py    JSON Schema generated from the dataclasses
     storage/        where a document goes
       files.py      writing a document to its path, atomically
-      db.py         the Supabase client, and the one list of its key names
-      supabase.py   documents -> rows; the only module that knows table names
     models/         who answers a model call
       base.py       VLM, LLM, Embedder: what a model is, and how it is called
       llm.py        the ready-made VLMs and LLMs: OpenAI, Chat, Anthropic, Stub

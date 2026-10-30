@@ -74,8 +74,6 @@ def cached_view(report: dict[str, Any], aud: dict[str, Any]) -> Optional[dict[st
     kept = load_view(report["id"], aud)
     if kept is None:
         return None
-    for old in ("baseline", "compare"):              # in views kept by earlier runs
-        kept.pop(old, None)
     if "appeal" in report:
         kept["appeal"] = appeal_mod.for_audience(report["appeal"], aud)
     return kept

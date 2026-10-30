@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+# uploads, vidra's output, reports and the Qloo cache. Qloo's terms: its
+# responses may be cached privately, never published in a repository.
+data/
+*.egg-info/
+build/
+dist/
+weights/
+.pytest_cache/

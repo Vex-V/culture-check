@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Culture Check</title>
+<meta name="description" content="Shows which age groups a video's cultural cues reach, using Qloo's taste graph.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231b1a17'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%23f6f4ef' stroke-width='4' stroke-dasharray='33 11'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="mark"><i></i></span><b>Culture Check</b></a>
+    <nav class="tabs">
+      <a href="/" id="nav-upload">Upload</a>
+      <a href="/tested" id="nav-tested">Real-world results</a>
+    </nav>
+    <span class="by">Built on vidra and Qloo</span>
+  </div>
+</header>
+
+<main id="home" class="wrap hidden">
+  <section class="hero">
+    <div>
+      <h1>Does your video speak to <em>the audience you made it for?</em></h1>
+      <p class="lede">Culture Check finds the brands, places, clothes and settings in your video
+        and shows which age groups each one reaches, using Qloo's audience data.</p>
+      <ol class="how">
+        <li><span>01</span><div><b>Read the video.</b> <span class="muted">It describes each shot and transcribes the sound to find the cues.</span></div></li>
+        <li><span>02</span><div><b>Ask Qloo who each cue reaches.</b> <span class="muted">Each cue gets its audience by age and gender, and its following in your city.</span></div></li>
+        <li><span>03</span><div><b>Fix what misses.</b> <span class="muted">It suggests replacements, writes a brief and answers follow-up questions.</span></div></li>
+      </ol>
+    </div>
+    <form id="upload" class="card pad" autocomplete="off">
+      <h2>Upload an ad</h2>
+      <p class="muted" style="margin:6px 0 16px">An ad, a trailer, a creator's video: up to <span id="lim-s">90</span> seconds.</p>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="video/*" hidden>
+        <b id="drop-name">Drop a video here, or choose one</b>
+        <span class="muted" id="drop-sub">.mp4, .mov or .webm, up to <span id="lim-mb">60</span> MB</span>
+      </label>
+      <div class="field">
+        <label>Who is it for? <span class="hint">age</span></label>
+        <div class="seg" id="up-age"></div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>Gender <span class="hint">optional</span></label>
+          <div class="seg" id="up-gender"></div>
+        </div>
+        <div class="field">
+          <label for="up-loc">City <span class="hint">optional</span></label>
+          <input type="text" id="up-loc" placeholder="e.g. Austin, Seoul">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="up-music">Soundtrack <span class="hint">optional</span></label>
+          <input type="text" id="up-music" placeholder="e.g. Fleetwood Mac – Dreams">
+        </div>
+        <div class="field">
+          <label for="up-cast">Who's in it <span class="hint">optional</span></label>
+          <input type="text" id="up-cast" placeholder="e.g. Sabrina Carpenter">
+        </div>
+      </div>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">People are never identified from their faces: name the talent and Qloo scores them.</p>
+      <button class="btn wide" id="go" disabled>Check it</button>
+      <div class="err" id="up-err"></div>
+    </form>
+  </section>
+  <div class="section-head">
+    <h2>Example reports</h2>
+    <span class="muted">Change the audience to see the scores change.</span>
+  </div>
+  <div class="samples" id="samples"></div>
+</main>
+
+<main id="progress" class="wrap hidden">
+  <div class="progress card pad">
+    <h2 id="pg-title">Checking your video</h2>
+    <p class="muted" id="pg-sub">This takes about a minute for every minute of video.</p>
+    <ul class="steps" id="pg-steps"></ul>
+    <div class="err" id="pg-err"></div>
+  </div>
+</main>
+
+<main id="report" class="wrap hidden">
+  <div class="rhead">
+    <div class="title">
+      <div class="kind" id="r-meta"></div>
+      <h2 id="r-title"></h2>
+    </div>
+  </div>
+  <div class="audbar card" id="audbar">
+    <span class="lbl">Audience</span>
+    <div class="seg" id="r-age"></div>
+    <span class="sep"></span>
+    <div class="seg" id="r-gender"></div>
+    <span class="sep"></span>
+    <input type="text" id="r-loc" placeholder="City (optional)">
+    <button class="btn ghost" id="r-apply" style="padding:6px 12px">Check</button>
+    <span class="typing hidden" id="r-busy">Asking Qloo…</span>
+  </div>
+
+  <div id="r-body">
+    <section class="card pad verdict">
+      <div class="gauge" id="r-gauge"></div>
+      <div>
+        <div class="headline" id="r-headline"></div>
+        <p class="summary" id="r-summary"></p>
+        <div class="counts" id="r-counts"></div>
+      </div>
+    </section>
+
+    <div class="grid2 appeal-row">
+      <section class="card pad" id="r-appeal"></section>
+      <section class="card pad" id="r-agemap"></section>
+    </div>
+
+    <div class="grid2">
+      <div class="stack">
+        <section class="card pad player">
+          <video id="r-video" controls playsinline preload="metadata"></video>
+          <div class="shots" id="r-shots"></div>
+          <div class="shotages" id="r-shotages"></div>
+          <div class="tracks" id="r-tracks"></div>
+          <div class="legend">
+            <span><i class="fill-fits"></i>fits the audience</span>
+            <span><i class="fill-neutral"></i>neutral</span>
+            <span><i class="fill-off"></i>works against it</span>
+            <span><i class="fill-unknown"></i>no Qloo audience data</span>
+          </div>
+        </section>
+        <section class="card pad brief" id="r-brief"></section>
+      </div>
+      <aside class="card chat">
+        <div class="pad" style="padding-bottom:10px;border-bottom:1px solid var(--line)">
+          <h3>Ask the analyst</h3>
+          <div class="muted" style="font-size:13px">Answers use Qloo's data.</div>
+        </div>
+        <div class="log" id="c-log"></div>
+        <div class="suggest" id="c-suggest"></div>
+        <form id="c-form"><input type="text" id="c-in" placeholder="What if the song were Olivia Rodrigo?"><button class="btn">Ask</button></form>
+      </aside>
+    </div>
+
+    <div class="section-head"><h2>Every cue, measured</h2><span class="muted">Bar: Qloo's fit for this audience, −1 to 1.</span></div>
+    <div class="cues" id="r-cues"></div>
+  </div>
+</main>
+
+<main id="tested" class="wrap hidden">
+  <div class="tested-head">
+    <div class="kind">Real-world results</div>
+    <h1>What the app said, next to what Meta reports</h1>
+    <p class="lede">Each ad below ran in the EU, so Meta publishes who it actually reached, by age. The app
+      saw only the video. It never sees these numbers.</p>
+    <p class="muted" id="t-caveat"></p>
+  </div>
+  <div id="t-body"></div>
+</main>
+
+<footer><div class="wrap">Culture Check · <a href="https://github.com/Vex-V/culture-check">Code</a> · Built on <a href="https://github.com/Vex-V/culture-check/tree/main/vidra">vidra</a> and <a href="https://www.qloo.com/">Qloo</a> · Uploads are not listed publicly. Frames and transcripts are sent to OpenAI.</div></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

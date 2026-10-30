@@ -3,7 +3,7 @@
 Culture Check shows which age groups a video's cultural cues reach.
 
 **Live app:** https://culture-check.vercel.app
-
+ 
 Upload an ad and choose a target audience. Culture Check finds the brands, places,
 clothes and settings in each shot, looks up who each one reaches in
 [Qloo's taste graph](https://www.qloo.com/), and suggests replacements for the cues

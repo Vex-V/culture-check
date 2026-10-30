@@ -13,10 +13,11 @@ RUN pip install --no-cache-dir .
 # Whisper's weights in the image, so the first upload does not wait for them.
 ENV HF_HOME=/opt/hf
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8')"
+ENV HF_HUB_OFFLINE=1
 
-# Hugging Face runs the container as a non-root user.
-RUN mkdir -p /data && chmod -R a+rwX /data /opt/hf
+# deploy/seed is not in the repo: scripts/bundle.py writes it before a deploy.
+COPY deploy /opt/deploy
 
-ENV CC_DATA=/data HOST=0.0.0.0 PORT=7860 PYTHONUNBUFFERED=1
-EXPOSE 7860
+ENV CC_DATA=/tmp/data CC_SEED_DIR=/opt/deploy/seed HOST=0.0.0.0 PORT=80 PYTHONUNBUFFERED=1
+EXPOSE 80
 CMD ["culturecheck"]

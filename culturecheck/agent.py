@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from . import fit as fitting
@@ -165,6 +166,8 @@ class Tools:
                          if c["fit"] is not None]}
 
     async def find_moment(self, query: str) -> dict[str, Any]:
+        if not (settings().out / self.report["id"]).exists():
+            return {"moments": _matching(self.report["shots"], query)}
         from vidra.shared.storage.folder import Folder
         from vidra.video_rag import search
 
@@ -188,6 +191,20 @@ class Tools:
                 "profile": _profile_line(cue["profile"]) if cue.get("profile") else None,
                 "swaps": [{"name": s["name"], "fit": s["fit"], "how": s.get("how")}
                           for s in self.view["swaps"].get(cue_id, [])]}
+
+
+def _matching(shots: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """Shots sharing the most words with a query: an upload's index is not kept."""
+    words = set(re.findall(r"\w{3,}", query.lower()))
+    hits = []
+    for s in shots:
+        summary = (s.get("seen") or {}).get("summary", "")
+        found = set(re.findall(r"\w{3,}", f"{summary} {s.get('said', '')}".lower()))
+        if words & found:
+            hits.append((len(words & found), s, summary))
+    hits.sort(key=lambda h: -h[0])
+    return [{"shot": s["shot"], "start": s["start"], "end": s["end"], "summary": summary[:240]}
+            for _, s, summary in hits[:3]]
 
 
 def _summary(name: str, args: dict[str, Any], result: dict[str, Any]) -> str:

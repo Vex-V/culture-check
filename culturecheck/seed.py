@@ -1,13 +1,14 @@
-"""Fills an empty data folder with the example reports.
+"""The example reports, copied from the image into the writable data folder.
 
-The hosted app starts with no data, and Qloo's responses may not sit in a public
-repository, so the examples live in a private dataset named by `CC_SEED_DATASET`.
+They hold Qloo's responses, so they are in the deployment and never in the repo.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
+from pathlib import Path
 
 from .config import settings
 
@@ -15,14 +16,7 @@ log = logging.getLogger("culturecheck.seed")
 
 
 def seed() -> None:
-    repo = os.environ.get("CC_SEED_DATASET")
-    if not repo or (settings().data / "samples.json").exists():
-        return
-    from huggingface_hub import snapshot_download
-
-    try:
-        snapshot_download(repo, repo_type="dataset", local_dir=settings().data,
-                          token=os.environ.get("HF_TOKEN"))
-        log.info("examples loaded from %s", repo)
-    except Exception:                                     # noqa: BLE001
-        log.exception("could not load the examples; uploads still work")
+    source = os.environ.get("CC_SEED_DIR")
+    if source and Path(source).is_dir() and not (settings().data / "samples.json").exists():
+        shutil.copytree(source, settings().data, dirs_exist_ok=True)
+        log.info("examples copied from %s", source)

@@ -1,8 +1,8 @@
-"""Copies the example reports into a folder for the private dataset.
+"""Copies the example reports into the folder a deployment's image takes them from.
 
-    python scripts/bundle.py OUT
+    python scripts/bundle.py deploy/seed
 
-Holds Qloo responses and ad videos, so OUT must never go in a public repository.
+Holds Qloo responses and ad videos, so that folder must never go in a public repository.
 """
 
 from __future__ import annotations

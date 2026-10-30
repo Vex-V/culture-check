@@ -5,8 +5,11 @@ __pycache__/
 # uploads, vidra's output, reports and the Qloo cache. Qloo's terms: its
 # responses may be cached privately, never published in a repository.
 data/
+deploy/seed/
 *.egg-info/
 build/
 dist/
 weights/
 .pytest_cache/
+.vercel
+.env*

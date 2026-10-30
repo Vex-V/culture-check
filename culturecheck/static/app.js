@@ -21,6 +21,9 @@ async function api(path, opts = {}) {
   return body;
 }
 
+const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify(body) });
+
 function show(id) {
   for (const m of ["home", "progress", "report", "tested"]) $("#" + m).classList.toggle("hidden", m !== id);
   $("#nav-upload").classList.toggle("on", id === "home");
@@ -84,22 +87,12 @@ function wireUpload() {
   $("#upload").onsubmit = async (e) => {
     e.preventDefault();
     if (!upload.file) return;
-    const fd = new FormData();
-    fd.append("video", upload.file);
-    fd.append("age", upload.age);
-    fd.append("gender", upload.gender);
-    fd.append("location", $("#up-loc").value.trim());
-    fd.append("music", $("#up-music").value.trim());
-    fd.append("cast", $("#up-cast").value.trim());
+    const aud = { age: upload.age, gender: upload.gender, location: $("#up-loc").value.trim() };
     $("#go").disabled = true; $("#go").textContent = "Uploading…"; $("#up-err").textContent = "";
     try {
-      const { job } = await api("/api/analyse", { method: "POST", body: fd });
-      const q = new URLSearchParams({ age: upload.age });
-      if (upload.gender) q.set("gender", upload.gender);
-      if ($("#up-loc").value.trim()) q.set("loc", $("#up-loc").value.trim());
-      history.pushState({}, "", `/r/${job}?${q}`);
-      route();
+      await check(upload.file, aud);
     } catch (err) {
+      show("home");
       $("#up-err").textContent = err.message;
     } finally {
       $("#go").disabled = !upload.file; $("#go").textContent = "Check it";
@@ -109,31 +102,71 @@ function wireUpload() {
 
 /* ------------------------------------------------------------ progress */
 
-async function progress(id) {
-  show("progress");
-  $("#pg-err").textContent = "";
-  for (;;) {
-    let job;
-    try { job = await api(`/api/jobs/${id}`); }
-    catch (err) { $("#pg-err").textContent = err.message; return false; }
-    if (job.state === "done") return true;
-    if (job.state === "failed") { $("#pg-err").textContent = "Something went wrong: " + job.error; return false; }
-    const steps = job.steps || {};
-    const done = new Set(job.done || []);
-    $("#pg-sub").textContent = job.state === "queued"
-      ? `Waiting for ${job.ahead} video${job.ahead === 1 ? "" : "s"} ahead of yours…`
-      : `About a minute for every minute of video (this one is ${Math.round(job.seconds)}s).`;
-    $("#pg-steps").innerHTML = Object.entries(steps).map(([k, label]) => {
-      const cls = k === job.step ? "now" : done.has(k) ? "done" : "";
-      return `<li class="${cls}"><span class="dot"></span>${esc(label)}</li>`;
-    }).join("");
-    await new Promise((r) => setTimeout(r, 1200));
+const UPLOAD_PIECE = 1 << 20;
+
+function renderSteps(steps, now, done) {
+  $("#pg-steps").innerHTML = Object.entries(steps).map(([k, label]) => {
+    const cls = k === now ? "now" : done.has(k) ? "done" : "";
+    return `<li class="${cls}"><span class="dot"></span>${esc(label)}</li>`;
+  }).join("");
+}
+
+async function send(ws, file) {
+  for (let at = 0; at < file.size; at += UPLOAD_PIECE) {
+    while (ws.bufferedAmount > 4 * UPLOAD_PIECE) await new Promise((r) => setTimeout(r, 50));
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(await file.slice(at, at + UPLOAD_PIECE).arrayBuffer());
   }
+}
+
+/* One connection carries the upload, the progress and the report. Nothing is kept
+   on the server afterwards, so the page keeps the report, its frames and the file. */
+function check(file, aud) {
+  return new Promise((resolve, reject) => {
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${scheme}://${location.host}/api/run`);
+    const frames = {}, done = new Set();
+    let steps = {}, now = null, finished = false;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ name: file.name, size: file.size, ...aud,
+                               music: $("#up-music").value.trim(), cast: $("#up-cast").value.trim() }));
+      send(ws, file);
+    };
+    ws.onmessage = async (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === "start") {
+        steps = m.steps;
+        show("progress");
+        $("#pg-err").textContent = "";
+        $("#pg-sub").textContent = `Checking a ${Math.round(m.seconds)}-second video can take a few minutes. Keep this page open.`;
+        renderSteps(steps, null, done);
+      } else if (m.type === "step") {
+        if (now) done.add(now);
+        now = m.step;
+        renderSteps(steps, now, done);
+      } else if (m.type === "frame") {
+        frames[m.index] = `data:image/jpeg;base64,${m.jpg}`;
+      } else if (m.type === "done") {
+        finished = true;
+        ws.close();
+        history.pushState({}, "", "/");
+        await openHeld(m.report, m.view, frames, URL.createObjectURL(file));
+        resolve();
+      } else if (m.type === "error") {
+        finished = true;
+        ws.close();
+        reject(new Error(m.error));
+      }
+    };
+    ws.onclose = () => {
+      if (!finished) reject(new Error("The connection closed before the check finished. Try a shorter video."));
+    };
+  });
 }
 
 /* ------------------------------------------------------------ report */
 
-const R = { report: null, view: null, aud: null, chats: {}, cue: null };
+const R = { report: null, view: null, aud: null, chats: {}, cue: null, frames: null };
 
 function audFromUrl(rep) {
   const q = new URLSearchParams(location.search);
@@ -149,21 +182,38 @@ async function openReport(id) {
   let rep;
   try { rep = await api(`/api/reports/${id}`); }
   catch {
-    const ok = await progress(id);
-    if (!ok) return;
-    rep = await api(`/api/reports/${id}`);
+    show("progress");
+    $("#pg-sub").textContent = "";
+    $("#pg-steps").innerHTML = "";
+    $("#pg-err").textContent = "That report isn't here. Uploaded videos are not kept.";
+    return;
   }
+  R.frames = null;
+  R.view = null;
+  showReport(rep, `/api/reports/${id}/video`);
+  await loadView();
+}
+
+/* A report only this page holds: an upload's. */
+async function openHeld(rep, view, frames, video) {
+  R.frames = frames;
+  R.view = null;
+  showReport(rep, video);
+  R.view = view;
+  renderView();
+}
+
+function showReport(rep, video) {
   R.report = rep;
   R.aud = audFromUrl(rep);
   show("report");
   document.title = `${rep.title} · Culture Check`;
   $("#r-title").textContent = rep.title;
-  $("#r-meta").textContent = `${Math.round(rep.duration)} seconds · ${rep.shots.length} shots · ${rep.cues.length} cultural cues${rep.music ? " · soundtrack: " + rep.music : ""}${rep.talent ? " · featuring " + rep.talent : ""}`;
+  $("#r-meta").textContent = `${Math.round(rep.duration)} seconds · ${rep.shots.length} shots · ${rep.cues.length} cultural cues${rep.music ? " · soundtrack: " + rep.music : ""}${rep.talent ? " · featuring " + rep.talent : ""}${R.frames ? " · not saved: this report goes when you leave the page" : ""}`;
   const v = $("#r-video");
-  v.src = `/api/reports/${id}/video`;
+  v.src = video;
   v.ontimeupdate = tick;
   wireAudience();
-  await loadView();
 }
 
 function wireAudience() {
@@ -180,12 +230,11 @@ async function loadView() {
   const q = new URLSearchParams({ age: R.aud.age });
   if (R.aud.gender) q.set("gender", R.aud.gender);
   if (R.aud.location) q.set("loc", R.aud.location);
-  history.replaceState({}, "", `/r/${id}?${q}`);
+  if (!R.frames) history.replaceState({}, "", `/r/${id}?${q}`);
   if (R.view) provisional();
   $("#r-busy").classList.remove("hidden");
   try {
-    const p = new URLSearchParams({ age: R.aud.age, gender: R.aud.gender, location: R.aud.location });
-    R.view = await api(`/api/reports/${id}/view?${p}`);
+    R.view = await post("/api/view", { report: R.report, ...R.aud });
     renderView();
   } catch (err) {
     $("#r-headline").textContent = err.message;
@@ -345,7 +394,7 @@ function renderTimeline() {
   $("#r-shots").innerHTML = rep.shots.map((s) => {
     const f = s.frames[Math.floor(s.frames.length / 2)];
     return `<div class="shot" data-shot="${s.shot}" title="Shot ${s.shot} · ${fmtT(s.start)}–${fmtT(s.end)}"
-      style="flex:${(s.end - s.start).toFixed(2)};${f !== undefined ? `background-image:url('/api/reports/${rep.id}/frames/${f}.jpg')` : ""}"><span>${s.shot}</span></div>`;
+      style="flex:${(s.end - s.start).toFixed(2)};${f !== undefined ? `background-image:url('${R.frames ? R.frames[f] : `/api/reports/${rep.id}/frames/${f}.jpg`}')` : ""}"><span>${s.shot}</span></div>`;
   }).join("");
   for (const el of $("#r-shots").children) el.onclick = () => seekShot(+el.dataset.shot);
   const cues = [...R.view.cues].sort((a, b) => (b.weight - a.weight) || ((a.fit ?? 9) - (b.fit ?? 9)));
@@ -516,11 +565,8 @@ async function ask(text) {
   $("#c-log").insertAdjacentHTML("beforeend", `<div class="typing" id="c-typing">Thinking, and asking Qloo…</div>`);
   $("#c-log").scrollTop = 1e6;
   try {
-    const res = await api(`/api/reports/${R.report.id}/chat`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ age: R.aud.age, gender: R.aud.gender, location: R.aud.location,
-                             messages: log.map(({ role, content }) => ({ role, content })) }),
-    });
+    const res = await post("/api/chat", { report: R.report, view: R.view, ...R.aud,
+                                          messages: log.map(({ role, content }) => ({ role, content })) });
     log.push({ role: "assistant", content: res.text, steps: res.steps });
   } catch (err) {
     log.push({ role: "assistant", content: "Sorry: " + err.message, steps: [] });

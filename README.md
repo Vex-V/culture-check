@@ -2,6 +2,8 @@
 
 Culture Check shows which age groups a video's cultural cues reach.
 
+**Live app:** https://culture-check.vercel.app
+
 Upload an ad and choose a target audience. Culture Check finds the brands, places,
 clothes and settings in each shot, looks up who each one reaches in
 [Qloo's taste graph](https://www.qloo.com/), and suggests replacements for the cues
@@ -65,6 +67,7 @@ Predictions were written before each test ran. Full results are in
 - Qloo has no audience data for about 40% of cues.
 - Style and setting replacements are weaker than brand and artist replacements.
 - Results vary between runs, because each run reads the cues afresh.
+- Uploaded reports are not saved. A report is gone when you leave the page.
 
 ## Run it
 
@@ -86,10 +89,22 @@ python scripts/run.py VIDEO --age 25_to_29 --gender female --location Austin
 
 A minute of video takes about a minute on a CPU.
 
+## Deploy
+
+The app runs as one container on Vercel. The example reports go into the image from
+`deploy/seed`, which is not in this repository.
+
+```bash
+python scripts/bundle.py deploy/seed
+vercel deploy --prod
+```
+
+Set `OPENAI_API_KEY` and `QLOO_API_KEY` in the project's environment variables.
+
 ## Data
 
-Qloo's responses are stored privately and are not in this repository. Uploaded frames
-and transcripts are sent to OpenAI.
+Qloo's responses are stored privately and are not in this repository. Uploads are deleted
+after each check. Uploaded frames and transcripts are sent to OpenAI.
 
 ## Licence
 
